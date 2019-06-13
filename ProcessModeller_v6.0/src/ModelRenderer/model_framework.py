@@ -45,6 +45,9 @@ class Model(object):
     Collect and initialize the internal model reprentation
     """
     for label, node in self.model_dict["nodes"].items():
+      # print(node)
+      if node["type"] == 'node_composite':
+        continue
       self.nodes[label] = Node(label, node)
 
     for label, arc in self.model_dict["arcs"].items():
@@ -197,6 +200,8 @@ class IndexSet(object):
     outer = self.ind_dict['outer']                         # Always node or arc
     inner = self.ind_dict['inner']
 
+    self.outer = outer
+
     nw_tk_ttk = self.model.ontology.token_typedtoken_on_networks
     if outer == 'node':                                   # Node based indexing
       if "_" in inner:
@@ -204,7 +209,7 @@ class IndexSet(object):
       else:
         ttok, conv = '', ''
       for label, node in self.model.nodes.items():
-        mapping.append(label)
+        mapping.append(int(label))
         blocksize = 0
         if node.network:
           td = nw_tk_ttk[node.network].items()

@@ -11,6 +11,8 @@ import os
 from time import strftime                                    # Library for time
 import copy
 import numpy as np
+import sys
+from shutil import copyfile
 
 from jinja2 import Environment, FileSystemLoader
 
@@ -21,6 +23,9 @@ from OntologyEquationEditor.variable_framework import Expression, Variables, Equ
 from OntologyEquationEditor.resources import CODE              # Code templates
 
 from ModelRenderer.model_framework import Model
+
+UTILITIES_FILE_NAME = 'funcUtils.py'               # File name of exstra functions
+np.set_printoptions(threshold=sys.maxsize, linewidth=1000)
 
 
 class ModelRenderer(object):
@@ -84,12 +89,12 @@ class ModelRenderer(object):
                                                      self.case_name)
     self.init_globals_dict = getData(self.init_globals_loc)
     self.init_calseq_loc = FILES["calculation_sequence"] % (self.onto_name,
-                                                     self.mod_name,
-                                                     self.case_name)
+                                                            self.mod_name,
+                                                            self.case_name)
     self.init_calseq_dict = getData(self.init_calseq_loc)
+    self.states = self.init_calseq_dict['states']
     self.variables_init_used_set = set(self.init_calseq_dict['vars'])
     self.calculation_order = self.init_calseq_dict['calculation_order']
-
     self.var_list = self.get_all_used_variables()
 
   def generate_output(self):
@@ -105,6 +110,14 @@ class ModelRenderer(object):
     self.network_main_list = self.gather_network_variables()
     self.output_network_variables = self.render_network_variables()
     self.writeNetworks(self.output_network_variables)
+
+    # States and solver properties
+
+    # equations
+    self.output_dynamic_eqs, self.output_constant_eqs = self.equation_list_output()
+    self.writeSimulation()
+
+    self.copySimulationOperators()
 
   def setup_system(self, language):
     """
@@ -159,8 +172,6 @@ class ModelRenderer(object):
           # print('var: ', label, index_sets)
           for index_set in index_sets:
             if index_set.type == 'block_index':
-              # print
-              # print(self.indices)
               ind_list = self.indices_dict[index_set.label]['outer']
             elif index_set.label in self.typed_tokens_dict.keys():
               ind_list = 'globals'
@@ -176,7 +187,10 @@ class ModelRenderer(object):
         value = {}
         variables_init[label]['group'] = 'node'
         for node, vars in self.init_node_dict.items():
+          # print('var: ', label, vars[label])
           value[node] = vars[label]
+          # print(vars[label])
+        # print(value)
         variables_init[label]['value'] = value
         # print(self.init_node_dict)
       elif ind_list == 'arc':
@@ -197,16 +211,20 @@ class ModelRenderer(object):
     for label, variable in self.variables_init.items():
       val = []
       if variable['group'] == 'node':
-        for node, value in sorted(variable['value'].items()):
-          val.append(value[0])
+        for node in sorted(variable['value'].keys()):
+          value = variable['value'][node]
+          val += value
+
       elif variable['group'] == 'arc':
-        for arc, value in sorted(variable['value'].items()):
-          val.append(value[0])
+        for arc in sorted(variable['value'].keys()):
+          value = variable['value'][arc]
+          val += value
       elif variable['group'] == 'globals':
         if self.variables[label].index_structures:
-          val += variable['value'][0]                                    # LIST
+          val += variable['value']                                    # LIST
         else:
           val = copy.copy(variable['value'][0][0])
+
       out_put_version = CODE[self.language]["array"] % (val)
       var_output.append(var_str.format(label, out_put_version))
     return var_output
@@ -235,21 +253,29 @@ class ModelRenderer(object):
           print('NOT AN INCIDENCE MATRIX')
         else:
           mat = self.makeIncidenceMatrix(var_obj, token, mechanism, network)
-          print(mat)
-          str_mat = self.matrix_to_string(mat)
-          out = out_str.format(var = var['aliases'][self.language],
-                               list = CODE[self.language]['list'],
-                               val = str_mat)
-          output_variables.append(out)
-        # mechanism = var['']
-    print(output_variables)
+
+      elif var['doc'] == 'projection matrix':
+        # token = var['token']
+        var_obj = self.variables[label]
+        typed_token = var['index_structures'][0]
+        blocked_index = var['index_structures'][1]
+        network = var['network']
+        mat = self.makeProjection(var_obj, typed_token, blocked_index)
+        # print(var)
+        # makeProjection(self, variable, token, typed_token, constituent_dict)
+      else:
+        continue
+      str_mat = self.matrix_to_string(mat)
+      out = out_str.format(var = var['aliases'][self.language],
+                           list = CODE[self.language]['list'],
+                           val = str_mat)
+      output_variables.append(out)
     return output_variables
 
   def size_of_variable(self, variable):
     """
     Calculate size of variable
     """
-
     component_list = {}
     index_structures = variable.index_structures
     if not index_structures:
@@ -273,11 +299,29 @@ class ModelRenderer(object):
               if str(arc) in curr_network.arcs:
                 component_list['arc'].append(arc)
                 length += 1
+          elif ind_set == 'species':
+            for comp in curr_ind_obj.mapping:
+              length += 1
           else:
             print("THIS SHOULD NOT HAPPEN")
             print("THE USAGE OF THIS FUNCTION HAS NOT BEEN IMPLEMENTED")
-        else:
-          print("LOOK TO BLOCK INDEXES")
+        elif curr_ind_obj.type == 'block_index':
+          if curr_ind_obj.outer == 'node':
+            component_list['node'] = []
+            for node, blocking in zip(curr_ind_obj.mapping, curr_ind_obj.blocking):
+              if str(node) in curr_network.nodes:           # HAVE TO BE STRING
+                component_list['node'].append(node)
+                if blocking == 0:
+                  blocking = 1
+                length += blocking
+          if curr_ind_obj.outer == 'arc':
+            component_list['arc'] = []
+            for arc, blocking in zip(curr_ind_obj.mapping, curr_ind_obj.blocking):
+              if str(arc) in curr_network.arcs:           # HAVE TO BE STRING
+                component_list['arc'].append(arc)
+                if blocking == 0:
+                  blocking = 1
+                length += blocking
         size.append(length)
 
     return size, component_list
@@ -317,6 +361,57 @@ class ModelRenderer(object):
           mat[i, j] = 1.
     return mat
 
+  def makeProjection(self, variable, typed_token, block_index):
+    """
+    Make projection of typed_token to constituent
+
+    Args:
+      variable: variable
+      typed_token: typed version of the token
+      constituent_list: list of pricipal components it sould map for. Either
+                        node list or arc list.
+    """
+    size, cons_list = self.size_of_variable(variable)
+    mat = np.zeros(size)
+    network = variable.network
+    inv_map = {}
+
+    # Invert token typed token thing
+    for k, v in self.ontology.token_typedtoken_on_networks[network].items():
+      for vs in v:
+        inv_map[vs] = k
+
+    block_ind = self.model.indices[block_index]
+    if "_conversion" in typed_token:
+      print('Not implemented conversion atm')
+      return mat
+    typed_tok = self.model.typed_tokens[typed_token]
+    token = inv_map[typed_token]
+    if block_ind.outer == 'node':
+      for i, tt_label in enumerate(typed_tok.instances):
+        col_ind = 0
+        for j, node_label in enumerate(cons_list['node']):
+          node = self.model.nodes[str(node_label)]
+          if token in node.tokens.keys():
+            for k, tt_l in enumerate(node.tokens[token]):
+              if tt_l == tt_label:
+                mat[i, col_ind + k] = 1.0
+            col_ind += (len(node.tokens[token]))
+    elif block_ind.outer == 'arc':
+      for i, tt_label in enumerate(typed_tok.instances):
+        col_ind = 0
+        for j, arc_label in enumerate(cons_list['arc']):
+          arc = self.model.arcs[str(arc_label)]
+          # print(arc.label, arc.token)
+          if token == arc.token:
+            for k, tt_l in enumerate(arc.typed_tokens):
+              if tt_l == tt_label:
+                mat[i, col_ind + k] = 1.0
+            col_ind += (len(arc.typed_tokens))
+          else:
+            col_ind += 1
+    return mat
+
   def writeInitials(self, variables):
     output_dir = DIRECTORIES["output_language"] % (self.onto_name,
                                                    self.mod_name,
@@ -343,6 +438,50 @@ class ModelRenderer(object):
     f.write(s)
     f.close()
 
+  def __compileIndices(self):
+    """
+    Index sets
+    """
+    indices = []
+    for index_symbol, index in self.indices.items():
+      rs = "{} = IndexSet('{}', mapping = {}, blocking = {})"
+      string_version = rs.format(index['aliases'][self.language],
+                                 index_symbol,
+                                 self.model.indices[index_symbol].mapping,
+                                 self.model.indices[index_symbol].blocking)
+      if self.model.indices[index_symbol].mapping:
+        indices.append(string_version)
+    return indices
+
+  def writeSelection(self, selections):
+    """
+    write out the network variable file
+    """
+    output_dir = DIRECTORIES["output_language"] % (self.onto_name,
+                                                   self.mod_name,
+                                                   self.case_name,
+                                                   self.language)
+    if not os.path.exists(output_dir):
+      os.mkdir(output_dir)
+    THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+    TEMPLATE_DIR = os.path.join(THIS_DIR, 'Templates/')    # Internal placement
+
+    j2_env = Environment(loader=FileSystemLoader(TEMPLATE_DIR), trim_blocks=True)
+    s = j2_env.get_template('template_selections.py.j2').render(
+        date = '{}'.format(strftime("%Y-%m-%d %H:%M:%S")),
+        model_name = self.mod_name,
+        case_name = self.case_name,
+        variables = selections,
+        author = os.uname().nodename,
+      )
+    out_file = FILES["selections_variables"] % (self.onto_name,
+                                                self.mod_name,
+                                                self.case_name,
+                                                self.language)
+    f = open(out_file, 'w+')
+    f.write(s)
+    f.close()
+
   def writeNetworks(self, variables):
     """
     write out the network variable file
@@ -365,16 +504,162 @@ class ModelRenderer(object):
         author = os.uname().nodename,
       )
     out_file = FILES["networks_variables"] % (self.onto_name,
-                                             self.mod_name,
-                                             self.case_name,
-                                             self.language)
+                                              self.mod_name,
+                                              self.case_name,
+                                              self.language)
     f = open(out_file, 'w+')
     f.write(s)
     f.close()
 
-
   def equation_list_output(self):
     eq_list_output = []
+    eq_list_const = []
+    eq_s_tmp = '{} = {}'
     for eq in self.calculation_order:
+      var = self.variables[self.equations[eq].lhs]
       eq_str = self.expression(self.equations[eq].rhs)
-      print(eq_str)
+      if var.symbol in self.states:
+        continue                                               # Threated later
+      elif var.type in self.rules["has-port-variables"]:
+        out = eq_s_tmp.format(var.aliases[self.language], eq_str)
+        eq_list_const.append(out)
+      else:
+        out = eq_s_tmp.format(var.aliases[self.language], eq_str)
+        eq_list_output.append(out)
+    return eq_list_output, eq_list_const
+
+  def writeSimulation(self):
+    """
+    write out the network variable file
+    """
+    output_dir = DIRECTORIES["output_language"] % (self.onto_name,
+                                                   self.mod_name,
+                                                   self.case_name,
+                                                   self.language)
+    if not os.path.exists(output_dir):
+      os.mkdir(output_dir)
+    THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+    TEMPLATE_DIR = os.path.join(THIS_DIR, 'Templates/')    # Internal placement
+
+    states, derivatives, frame, int_start, int_end = self.get_frames_balances()
+
+    states_start, states_end = self.length_of_state_variables()   # Length size
+
+    indices = self.__compileIndices()
+
+    selection_defs, selection_eqs, sel_list = self.generate_reservoir_selections(derivatives)
+
+    self.writeSelection(selection_defs)
+
+    j2_env = Environment(loader=FileSystemLoader(TEMPLATE_DIR), trim_blocks=True)
+    s = j2_env.get_template('template_main.py.j2').render(
+        states_and_lengths = tuple(zip(states, states_start, states_end)),
+        date = '{}'.format(strftime("%Y-%m-%d %H:%M:%S")),
+        constant_equations = self.output_constant_eqs,
+        dynamic_equations = self.output_dynamic_eqs,
+        selection_eqs = selection_eqs,
+        author = os.uname().nodename,
+        model_name = self.mod_name,
+        case_name = self.case_name,
+        derivatives = derivatives,
+        frame_start = int_start,
+        frame_end = int_end,
+        indices = indices,
+        states = states,
+        frame = frame,
+      )
+    out_file = FILES["simulation_main_python"] % (self.onto_name,
+                                                  self.mod_name,
+                                                  self.case_name,
+                                                  self.language)
+    f = open(out_file, 'w+')
+    f.write(s)
+    f.close()
+
+  # Functions for output
+
+  def get_frames_balances(self):
+    """
+    get the state and frame variables from the states
+
+    The most hack function I have ever written.
+    """
+    # TODO: replace either by regex or by better function definition
+    derivatives = []
+    for var_label in self.states:
+      var = self.vars_dict[var_label]
+      for eq_no in var['equation_list']:
+        if eq_no in self.calculation_order:
+          state_eq = self.eqs_dict[eq_no]
+          state_str = copy.copy(state_eq['rhs'])
+          state_str = state_str.strip('integral')
+          state_str = state_str.strip('(')
+          derivative, rest = state_str.split(' :: ')
+          derivatives.append(derivative)
+          frame, limits = rest.split(' in ')
+          limits = limits.strip(')')
+          limits = limits.replace('[', '').replace(']', '')
+    states = self.states
+    int_start, int_end = limits.split(',')
+    return states, derivatives, frame, int_start, int_end
+
+  def generate_reservoir_selections(self, derivatives):
+    selection_defs = []
+    selection_eqs = []
+    sel_list = []
+
+    for derivative in derivatives:
+      var = self.variables[derivative]
+      size, list = self.size_of_variable(var)
+      if len(size) == 1:
+        size.append(1)
+      mat = np.ones(size)
+      nodes = self.model.networks[var.network].nodes
+      mapping = self.model.indices[var.index_structures[0]].mapping
+      blocking = self.model.indices[var.index_structures[0]].blocking
+
+      ind = 0
+      for map, block in zip(mapping, blocking):
+        if str(map) in nodes:
+          if self.model.nodes[str(map)].type == "constant":
+            for i in range(block):
+              mat[ind+i, 0] = 0
+          ind += block
+      sel_var = 'Selection_{}'.format(var.aliases[self.language])
+      sel_str = '{} = {}'
+
+      if self.language == 'python':
+        matstr = np.array2string(mat, prefix = '', sign = ' ', separator = ', ')
+      else:
+        matstr = str(mat)
+      selection_defs.append(sel_str.format(sel_var, matstr))
+      prop = CODE[self.language]['.'] % (sel_var, var.aliases[self.language])
+      selection_eqs.append(prop)
+
+      sel_list.append(sel_var)
+
+    return selection_defs, selection_eqs, sel_list
+
+  def length_of_state_variables(self):
+    states_start = []
+    states_end = []
+    start = 0
+    end = 0
+    for state_length, list in [self.size_of_variable(self.variables[var])
+                               for var in self.states]:
+      end += state_length[0]
+      states_start.append(start)
+      states_end.append(end)
+      start += state_length[0]
+    return states_start, states_end
+
+  def copySimulationOperators(self):
+    THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+    file_name = UTILITIES_FILE_NAME
+    source = os.path.join(THIS_DIR, file_name)
+    dest = DIRECTORIES["output_language"] % (self.onto_name,
+                                             self.mod_name,
+                                             self.case_name,
+                                             self.language)
+    destination = os.path.join(dest, file_name)
+    copyfile(source, destination)

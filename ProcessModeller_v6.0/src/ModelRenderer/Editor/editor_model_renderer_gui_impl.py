@@ -43,7 +43,7 @@ class Ui_ModelFactory(QtGui.QMainWindow):
 
     # self.model_file_name = '{}.json'.format(self.mod_name)
 
-    # self.fill_language_selection()
+    self.fill_language_selection()
     # message = '<b>Set up</b> <br />Ontology: {}<br />Model: {}'
     # display = message.format(self.ontology_name, self.mod_name)
     # self.ui.message_box.setText(display)
@@ -53,10 +53,11 @@ class Ui_ModelFactory(QtGui.QMainWindow):
       # self.setup_new_model_structure()
     # self.upload_topology()
 
-    ModelRenderer(self.ontology, self.mod_name, self.case_name)
+    self.mr = ModelRenderer(self.ontology, self.mod_name, self.case_name)
 
   def fill_language_selection(self):
     languages = ['-'] + LANGUAGES['code_generation']
+
     self.ui.output_language_box.clear()
     self.ui.output_language_box.addItems(languages)
 
@@ -64,9 +65,10 @@ class Ui_ModelFactory(QtGui.QMainWindow):
   def on_output_language_box_activated(self, language):
     self.ui.message_box.setText('Change output language to {}'.format(language))
     self.language = language
+    self.mr.setup_system(language)
 
   def on_produce_model_button_pressed(self):
-    pass
+    self.mr.generate_output()
 
   def closeEvent(self, event):
     self.deleteLater()

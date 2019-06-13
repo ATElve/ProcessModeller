@@ -6,7 +6,6 @@ Author:  {{ author }}
 Contact: arne.t.elve(at)ntnu.no
 Date:    {{ date }}
 Model:   {{ model_name }}
-Case:    {{ case_name }}
 """
 
 # Import packages:
@@ -15,16 +14,19 @@ from scipy.integrate import ode                           # Integrator in scipy
 import matplotlib.pyplot as plt                             # Data illustration
 from funcUtils import IndexSet, khatriRao, blockReduce, blockProduct   # Custom
 
-from constants import *                                  # Import all constants
-from networks import *                           # Import all network variables
-from selections import *
-# from selections_{{ mod_name }} import *                           # Import equation selections
-# from initial_states_{{ mod_name }} import *
+from constants_{{ mod_name }} import *                           # Import all constants
+from selections_{{ mod_name }} import *                           # Import equation selections
+from initial_states_{{ mod_name }} import *
 # =================================== BODY ================================== #
 
 # INDEX SETS:
 {% for index_set in indices %}
 {{ index_set }}
+{% endfor %}
+
+# Network information:
+{% for network in networks %}
+{{ network }}
 {% endfor %}
 
 # Constant equations:
@@ -48,11 +50,10 @@ def derivative(t, {% for state in states -%}{{ state }}{{ ", " if not loop.last}
   manually. Normal transpose is not sufficient.
   """
   # EQUATIONS:
-  {% for eq in dynamic_equations -%}
+  {% for eq in equations -%}
   {{ eq }}
   {% endfor -%}
-  # FIX THIS: IS IT NOW OK?
-  return {% for derivative in selection_eqs -%}
+  return {% for derivative in derivatives -%}
     {{ derivative }}{{ ", " if not loop.last}}
   {%- endfor %}
 
@@ -76,9 +77,7 @@ data = {}
 data['{{ state }}'] = []
 {% endfor -%}
 data['t'] = []
-dt = 0.1
-{{ frame_start }} = 0
-{{ frame_end }} = 1.                                               # Handcoded!!!
+dt = 0.1                                                         # Handcoded!!!
 integrator = ode(integrand).set_integrator('dop853')
 state = np.concatenate([{% for state in states -%}np.transpose({{ state }})[0]{{ ", " if not loop.last}}{% endfor %}])
 integrator.set_initial_value(state, {{ frame_start }})
@@ -90,11 +89,11 @@ while integrator.successful() and integrator.t < {{ frame_end }}:
   {% endfor %}
 
 
-{% for state in states -%}
+{% for state, labels in states_and_labels -%}
 data['{{ state }}'] = np.transpose(data['{{ state }}'])[0]
-{# labels = {{ labels }} #}
-for i, (dat) in enumerate(data['{{ state }}']):
-  plt.plot(data['t'], dat)
+labels = {{ labels }}
+for i, (dat, label) in enumerate(zip(data['{{ state }}'], labels)):
+  plt.plot(data['t'], dat, label = label)
 plt.legend()
 plt.show()
 
